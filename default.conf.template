@@ -1,0 +1,76 @@
+# ---------------------------------------------------------------------------
+# HOW THIS WORKS (read this before adding inbounds in the panel)
+#
+# Railway only gives us ONE public port ($PORT). Nginx listens on it and
+# routes by URL PATH to different internal ports where Xray inbounds and
+# the panel/subscription service actually listen.
+#
+# Instead of hand-adding an nginx location every time you create a new
+# inbound, every inbound you create MUST use "Listen IP 127.0.0.1" and a
+# PATH THAT STARTS WITH ITS PORT NUMBER. Nginx below extracts the port
+# from the path automatically and proxies there - no nginx edits needed
+# ever again as long as you follow this naming rule.
+#
+# Rule for every new inbound you create in the panel:
+#   Port:  any free port in the range 10000-10029
+#   Path:  /p<PORT>/<anything>          e.g. port 10007 -> path /p10007/x
+#
+# Examples:
+#   4x WS:      ports 10000-10003, paths /p10000/a /p10001/a /p10002/a /p10003/a
+#   4x xhttp:   ports 10010-10013, paths /p10010/a /p10011/a /p10012/a /p10013/a
+#   2x upgrade: ports 10020-10021, paths /p10020/a /p10021/a
+#
+# (the "/a" segment can be anything - only the /p<PORT>/ prefix matters)
+# ---------------------------------------------------------------------------
+
+server {
+    listen ${PORT};
+    server_name _;
+
+    # ---- 3x-ui PANEL ----
+    location /xp9k3panel/ {
+        proxy_pass http://127.0.0.1:2053/xp9k3panel/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # ---- Subscription service (per-user sub links, combines ALL inbounds) ----
+    # Panel Settings -> Subscription Settings must be set to:
+    #   Subscription Port: 2096
+    #   Subscription Path: /xp9k3sub/
+    location /xp9k3sub/ {
+        proxy_pass http://127.0.0.1:2096/xp9k3sub/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # ---- ANY Xray inbound, routed generically by port-in-path ----
+    # Matches /p10000/..., /p10017/..., etc. and proxies to that exact
+    # internal port. Add as many inbounds as you want in the panel - as
+    # long as they're on 127.0.0.1 and use the /p<PORT>/ path convention,
+    # NO CHANGE IS NEEDED HERE.
+    location ~ ^/p(?<iport>1000[0-9]|1001[0-9]|1002[0-9])/(?<rest>.*)$ {
+        proxy_pass http://127.0.0.1:$iport/p$iport/$rest$is_args$args;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_buffering off;
+        proxy_request_buffering off;
+        proxy_read_timeout 300s;
+    }
+
+    # Anything else: don't advertise that a proxy panel lives here
+    location / {
+        return 404;
+    }
+}
