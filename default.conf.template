@@ -1,0 +1,64 @@
+# Path-based router: /p<PORT>/... -> 127.0.0.1:<PORT> (ports 10000-10029)
+# Panel: /xp9k3panel/   Subscription: /xp9k3sub/
+#
+# Changes vs original (untested here, no nginx in my sandbox):
+#  1. map for Connection header (only send "upgrade" for real WS upgrades)
+#  2. client_max_body_size 0 (default 1m is enforced even with request
+#     buffering off -> kills long xhttp POST streams)
+#  3. client_body_timeout 3600s (xhttp stream-one upload is idle during a
+#     download; default 60s would cut it)
+#  4. proxy_read/send_timeout 3600s (idle WS died after 300s of silence)
+#  5. panel location gets Upgrade headers too
+
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      '';
+}
+
+server {
+    listen ${PORT};
+    server_name _;
+
+    client_max_body_size 0;
+    client_body_timeout 3600s;
+
+    location /xp9k3panel/ {
+        proxy_pass http://127.0.0.1:2053/xp9k3panel/;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location /xp9k3sub/ {
+        proxy_pass http://127.0.0.1:2096/xp9k3sub/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location ~ ^/p(?<iport>1000[0-9]|1001[0-9]|1002[0-9])/(?<rest>.*)$ {
+        proxy_pass http://127.0.0.1:$iport/p$iport/$rest$is_args$args;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_buffering off;
+        proxy_request_buffering off;
+        proxy_socket_keepalive on;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }
+
+    location / {
+        return 404;
+    }
+}
